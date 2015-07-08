@@ -17,8 +17,10 @@
 
 package kafka.manager.utils
 
+
 /**
  * Borrowed from kafka 0.8.1.1
  * https://git-wip-us.apache.org/repos/asf?p=kafka.git;a=blob;f=core/src/main/scala/kafka/common/TopicAndPartition.scala
  */
 case class TopicAndPartition(topic: String, partition: Int)
+

@@ -15,17 +15,20 @@
   assignForm: Form[List[(String, List[(Int,List[Int])])]],
   brokers: BrokerListExtended,
   brokersViews: Seq[BVView],
-  formErrors: Seq[FormError]
+  formErrors: Seq[FormError],
+  loadBalancedAssignment: List[(String, List[(Int,List[Int])])]
 )
 
 @theMenu = {
 @views.html.navigation.clusterMenu(cluster,"Topic","Manual Partition Assignments",models.navigation.Menus.clusterMenus(cluster))
 }
 
-@replicaSelection(brokerField: Field) = {
-    <select name="@brokerField.name">
+@replicaSelection(brokerField: Field, topic: String, partition: Int, replica: Int) = {
+    <select name="@brokerField.name" class="partition-select"
+            suggested-value="@controllers.ReassignPartitions.getSuggestion(loadBalancedAssignment,topic, partition, replica)" >
         @for(idx <- 0 until brokers.list.size) {
-            <option value="@idx" @if(idx == brokerField.value.get.toInt){selected}>Broker @idx</option>
+            <option value="@idx"
+                    @if(idx == brokerField.value.get.toInt){selected}>Broker @idx</option>
         }
     </select>
 }
@@ -33,20 +36,24 @@
 @topHeading = {
 <div class="panel-heading">
     <div class="row">
-        <h3>
             <div class="col-md-8">
+                <h3>
                 <button type="button" class="btn btn-link" onclick="goBack()">
                     <span class="glyphicon glyphicon-arrow-left" aria-hidden="true"></span>
                 </button>
                 Manual Partition Assignments
+                </h3>
             </div>
             <div class="btn-group-vertical col-md-4" role="group" aria-label="...">
-                <button class="btn btn-primary " type="submit">
+                <a class="btn btn-sm btn-default" onclick="suggestValues()">
+                    <span class="glyphicon glyphicon-flash"></span>
+                    Suggest Partition Assignment
+                </a>
+                <button class="btn btn-sm btn-primary " type="submit">
                     <span class="glyphicon glyphicon-floppy-disk"></span>
                     Save Partition Assignment
                 </button>
             </div>
-        </h3>
     </div>
 </div>
 }
@@ -81,11 +88,19 @@
                                value='@assignment("partition").value.get'
                                readonly>
                     </th>
+                    <th></th>
                 </tr>
                 }
-                <tr><td>
-                    Replica @index: @replicaSelection(broker)
-                </td></tr>
+                <tr>
+                    <td> Replica @index: @replicaSelection(broker,
+                                partitionAssignment("topic").value.get,
+                                assignment("partition").value.get.toInt,
+                                index)
+                    </td>
+                    <td>
+                        <div class="suggestion-label"> <small>from Broker @broker.value.get.toInt</small></div>
+                    </td>
+                </tr>
                 }
             </table>
         </div>

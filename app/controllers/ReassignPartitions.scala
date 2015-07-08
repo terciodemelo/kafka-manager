@@ -7,6 +7,7 @@ package controllers
 
 import kafka.manager.ActorModel._
 import kafka.manager.{BrokerListExtended, ApiError, TopicListExtended}
+import kafka.manager.utils.Box
 import models.navigation.Menus
 import models.{navigation, FollowLink}
 import models.form._
@@ -52,17 +53,17 @@ object ReassignPartitions extends Controller{
   )
 
   val manualReassignmentForm: Form[List[(String, List[(Int, List[Int])])]] = Form(
-    "topics" -> list (
-      tuple (
-        "topic" -> text,
-        "assignments" -> list (
-          tuple (
-            "partition" -> number,
-            "brokers" -> list(number)
+      "topics" -> list (
+        tuple (
+          "topic" -> text,
+          "assignments" -> list (
+            tuple (
+              "partition" -> number,
+              "brokers" -> list(number)
+            )
           )
         )
       )
-    )
   )
 
   val generateAssignmentsForm = Form(
@@ -134,6 +135,56 @@ object ReassignPartitions extends Controller{
     }
   }
 
+  private def loadBalancedAssignment(topicList: TopicListExtended) = {
+    val flattenedTopicListExtended = topicList.list.map {
+        case (topic, Some(topicIdentity)) =>
+          ((topic, topicIdentity.metrics), topicIdentity.partitionsIdentity.toList.map {
+            case (partition, identity) => (partition, identity.replicas.toList)
+          })
+        case (topic, None) => ((topic, None), List[(Int, List[Int])]())
+      } toList
+
+    // Map[broker, (Box[heightSum], Box[List[(topic, partition, replica, height)]])]
+    val assignment: Map[Int, (Box[Double], Box[List[(String, Int, Int, Double)]])] = (for {
+      (topic, mapping) <- flattenedTopicListExtended
+      (partition, brokers) <- mapping
+      (b, r) <- brokers.zipWithIndex
+    } yield {
+        topic._2 match {
+          case Some(brokerIdentity) => (b, (topic._1, partition, r, brokerIdentity.oSystemMetrics.processCpuLoad))
+          case None => (b, (topic._1, partition, r, 0D))
+        }
+      }) groupBy(_._1) map {case (k, v) => (k, (Box(v.map(_._2).map(_._4).sum), Box(v.map(_._2))))}
+
+    var canIterate: Boolean = true
+    while (canIterate) {
+      val broker = assignment.values.maxBy(_._1.get)
+      if (broker._2.get.size > 1) {
+        val minBroker = broker._2.get.minBy(_._4)
+        val brokerReceiver = assignment.values.minBy(_._1.get)
+
+        if (brokerReceiver._1.get + minBroker._4 < broker._1.get) {
+          brokerReceiver._1.set(brokerReceiver._1.get + minBroker._4)
+          brokerReceiver._2.set(brokerReceiver._2.get :+ minBroker)
+          broker._1.set(broker._1.get - minBroker._4)
+          broker._2.set(broker._2.get.filter(_ != minBroker))
+        } else canIterate = false
+      } else canIterate = false
+    }
+
+    (for {
+      (broker, conf) <- assignment.toList
+      (topic, partition, replica, height) <- conf._2.get
+    } yield {
+        (topic, (partition, (replica, broker)))
+      }).groupBy(_._1).map({ case (topic, v) =>
+          (topic, v.map(_._2).toList.groupBy(_._1).map({ case (partition, v2) =>
+              (partition, v2.map(_._2).sortBy(_._1).map({ case (k3, broker) => broker}))
+            }).toList
+          )
+        }).toList.sortBy(_._2.size).reverse
+  }
+
   def manualMultipleAssignments(c: String): Action[AnyContent] = Action.async {
     val topicList = kafkaManager.getTopicListExtended(c)
     val brokersViews = kafkaManager.getBrokersView(c)
@@ -165,7 +216,8 @@ object ReassignPartitions extends Controller{
                   {err: ApiError => Future.successful( Ok(views.html.topic.confirmMultipleAssignments( c, -\/(err) )))},
                   {bVs: Seq[BVView] => Future {
                     Ok(views.html.topic.manualMultipleAssignments(
-                      c, manualReassignmentForm.fill(flattenedTopicListExtended(topics)), brokers , bVs, manualReassignmentForm.errors
+                      c, manualReassignmentForm.fill(flattenedTopicListExtended(topics)),
+                      brokers , bVs, manualReassignmentForm.errors, loadBalancedAssignment(topics)
                     ))
                   }}
                   )
@@ -310,5 +362,15 @@ object ReassignPartitions extends Controller{
           )))
       }
     )
+  }
+
+  def getSuggestion(suggestions: List[(String, List[(Int, List[Int])])], topic: String, partition: Int, replica: Int) = {
+      suggestions.find(_._1 == topic) match {
+        case Some(topicTuple) => topicTuple._2.find(_._1 == partition) match {
+          case Some(partitionAssignment) => partitionAssignment._2(replica)
+          case None => -1
+        }
+        case None => -1
+      }
   }
 }

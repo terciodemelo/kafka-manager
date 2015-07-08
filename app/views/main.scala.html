@@ -50,6 +50,11 @@
             $('.' + selectClass).css("display", display);
         }
     }
+
+    function suggestValues() {
+        $('.partition-select').val(function() {return $(this).attr("suggested-value")});
+        $('.suggestion-label').css("display", function() {return "block"});
+    }
 </script>
 @scripts
 </body>
